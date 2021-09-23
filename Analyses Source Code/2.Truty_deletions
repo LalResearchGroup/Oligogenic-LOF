@@ -1,0 +1,295 @@
+---
+title: "2. Frequency of deletions affecting multiple LOF-intolerant genes (Truty et al., 2018)"
+output: html_document
+---
+
+# **Identification and quantification of oligogenic loss-of-function disorders**
+
+All 18,197 human genes were retrieved from the UCSC Human Genome Browser in hg19 assembly. We defined three intervals (0.5 Mb, 1 Mb, 5 Mb). To showcase the genomic distribution of LOF-intolerant genes analysis we will focus here on thee 5 Mb interval only. We investigate the distribution of LOF-intolerant genes following two approaches (1) around each gene and (2) as a non-overlapping sliding window across the genome. Using bedtools (www. bedtools.readthedocs.io), we annotate LOF-intolerant genes to these artificial intervals and count for each gene all neighboring genes and all LOF-intolerant genes per interval. LOF-intolerant genes were defined by a probability of loss-of-function (LOF) intolerance (pLI)>0.9 based on variation observed in 60,706 exomes of the Exome Aggregation Consortium (ExAC). We annotated a total of 3,230 pLI genes.
+
+Input: Tab-delimited table with all human genes
+
+Output:
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# **Packages**
+
+```{r packagees, message = FALSE, warning = FALSE, echo = FALSE}
+library("devtools")
+library("tidyverse")
+library("scales")
+library("here")
+library("gridExtra")
+library("rmarkdown")
+```
+
+# **Read-in files**
+
+```{r read-in files, message = FALSE, warning = FALSE}
+# read-in files
+## all genes
+genes <- read.delim(here("data", "genes.txt"))
+# make genes.txt file available in output/data folder
+write_delim(genes, here("output", "data", "genes.txt"),
+            delim = "\t")
+# rename columns
+genes <- rename(genes, chromosome = chr, start = chromStart, stop = chromEnd)
+# pli genes
+hpli_genes <- read.delim(here("data", "fordist_cleaned_exac_r03_march16_z_pli_rec_null_data.txt"))
+# filter for gene and pli column
+hpli_genes <- hpli_genes %>% 
+  select(chr, cds_start, cds_end, pLI, gene) %>% 
+  filter(pLI >= 0.9)
+# set chr
+hpli_genes$chr <- sub("^", "chr", hpli_genes$chr)
+# save as tab delim .txt file for input in bedtools
+write_delim(hpli_genes, here("output", "data", "pLI-genes.txt"),
+                       delim = "\t")
+# rename column
+hpli_genes <- rename(hpli_genes, gene_hpli = gene)
+
+# Create interval - 5Mb - 2.5Mb around each gene
+genes_2500 <- genes %>%
+  mutate(start = start - 2500000,
+         stop = stop + 2500000) %>% # 18,197 genes
+  filter(start >= 0 & stop >= 0) # 17,644 after exclusion of all negative values for start and stop position because bedtools cant compute them
+# Write file for input in bedtools
+write_delim(genes_2500, here("output", "data", "genes_5mb.txt"),
+            col_names = FALSE, delim = "\t")
+```
+
+do I need all the abovee files to read in?
+
+
+## **Part 2: Frequency of deletions affecting multiple LOF-intolerant genes in affected individuals**
+
+### **CNV study dataset**
+
+Read-in files
+```{r read in CNV study df, message = FALSE, warning = FALSE}
+cnv_paper_master <- read_csv(here("data", "cnv_paper_df.csv"))
+
+# add unique identifie
+cnv_paper_master <- cnv_paper_master %>% 
+  rowid_to_column(var = "observation")
+
+# rename some columns
+cnv_paper_master <- rename(cnv_paper_master, gene = Gene, variant_type = `Variant type`, pos_start = `Start [GRCh37]`, pos_end = `Stop [GRCh37]`, size_paper = `Length [bp]`, pathogenicity = Interpretation, chromosome = Chromosome)
+
+# set chr before Chromosome
+cnv_paper_master$chromosome <- sub("^", "chr", cnv_paper_master$chromosome)
+
+# calculate new column for CNV size (based on the NA replacements in the start and stop columns)
+cnv_paper_master <- cnv_paper_master %>% 
+  mutate(cnv_size = pos_end - pos_start)
+
+# save as .csv
+write_csv(cnv_paper_master, here("output", "data", "cnv_paper_master_edit_R.csv"))
+```
+
+Prep df for bedtools
+
+```{r first filtering, message = FALSE, warning = FALSE}
+# select columns needed
+cnv_paper_df <- cnv_paper_master %>% 
+  select(chromosome, pos_start, pos_end, observation)
+  # filter(pos_start != "NA") # the dataset contains several NAs for the start and end position of the CNV at hand ----> fixed that issue! 2020-02-24
+
+# make observation column dbl
+cnv_paper_df$observation <- as.double(as.character(cnv_paper_df$observation))
+
+# write new file for bedtools
+write_delim(cnv_paper_df, here("output", "data", "cnv_paper_bed.txt"), 
+                   delim = "\t", col_names = FALSE)
+
+# import_cnv_paper_df <- read_delim("~/Dropbox/My Mac (lri-107959.local)/Desktop/work/projects/2019-11_CNV/bedtools/cnv_paper_all_variant_types.txt", 
+#                    delim = "\t")
+```
+
+**bedtools**
+
+Go to correct directory:
+
+Perform tasks:
+1. bedtools intersect –a cnv_paper_bed.txt –b genes.txt –wao >allgenes_cnv_paper.txt
+2. bedtools groupby –i allgenes_cnv_paper.txt –g 1,2,3,4 –c 8 –o collapse >mastertable_cnv_paper.txt
+
+3. bedtools intersect –a cnv_paper_bed.txt –b pLI-genes.txt –wao >allpligenes_cnv_paper.txt
+4. bedtools groupby –i allpligenes_cnv_paper.txt –g 1,2,3,4 –c 9 –o collapse >mastertable_pLI_cnv_paper.txt
+	
+
+Import bedtool output data
+
+```{r read-in bedtools results, message = FALSE, warning = FALSE}
+# all genes
+all_genes_cnv_paper <- read_delim(here("output", "data", "allgenes_cnv_paper.txt"), 
+                         delim = "\t", col_names = FALSE)
+# # make observation column X4 chr
+# all_genes_decipher$X4 <- as.character(as.character(all_genes_decipher$X4))
+# 
+# # write new  all_genes_decipher  .txt file 
+# write_delim(all_genes_decipher, "~/Dropbox/My Mac (lri-107959.local)/Desktop/work/projects/2019-11_CNV/bedtools/all_genes_decipher_new.txt", 
+#                    delim = "\t", col_names = FALSE)
+
+# mastertable for analyzing all genes
+master_cnv_paper <- read_delim(here("output", "data","mastertable_cnv_paper.txt"), 
+                         delim = "\t", col_names = FALSE)
+
+# master_decipher_new <- read_delim("~/Dropbox/My Mac (lri-107959.local)/Desktop/work/projects/2019-11_CNV/bedtools/mastertable_decipher_new.txt", 
+#                          delim = "\t", col_names = FALSE)
+
+# all high pli genes
+hpli_genes_cnv_paper <- read_delim(here("output", "data", "allpligenes_cnv_paper.txt"), 
+                         delim = "\t", col_names = FALSE)
+
+# mastertable for analyzing high pli genes
+master_cnv_paper_hpli <- read_delim(here("output", "data", "mastertable_pLI_cnv_paper.txt"), 
+                              delim = "\t", col_names = FALSE)
+```
+
+Join all gene & pli gene dfs
+
+```{r join bedtools and cnv_paper_master}
+cnv_paper_bed_full_hpli <- inner_join(master_cnv_paper_hpli, cnv_paper_master, by = c("X4" = "observation"))
+
+# check for size > 200kb
+cnv_paper_bed_full_200kb <- cnv_paper_bed_full_hpli %>%  # N = 2,844
+  filter(cnv_size > 200000) # N = 168
+
+# median cnv size
+cnv_paper_bed_full_hpli_median <- cnv_paper_bed_full_hpli %>% 
+  mutate(median = median(cnv_paper_bed_full_hpli$cnv_size))
+# mean cnv size
+cnv_paper_bed_full_hpli_mean <- cnv_paper_bed_full_hpli %>% # median = 9,811.5
+  mutate(mean = mean(cnv_paper_bed_full_hpli$cnv_size)) # mean = 665,247.5
+
+write_csv(cnv_paper_bed_full_hpli, here("output", "data", "cnv_paper_bed_full_hpli.csv"))
+```
+
+Filter
+
+```{r filter for P/LP}
+# filter for plp, LOF, AD
+cnv_paper_master_plp <- cnv_paper_bed_full_hpli %>% 
+  filter(pathogenicity == "Pathogenic" | pathogenicity == "Likely Pathogenic") %>% 
+  filter(`Mol. Mechanism` == "LOF") %>% 
+  filter(Inheritance == "AD")
+cnv_paper_master_plp
+
+write.csv(cnv_paper_master_plp, here("output", "data", "cnv_paper_master_plp.csv"))
+
+cnv_paper_master_plp_del <- cnv_paper_master_plp %>%
+  filter(variant_type == "DEL")
+cnv_paper_master_plp_del
+
+write.csv(cnv_paper_master_plp_del, here("output", "data", "cnv_paper_master_plp_del.csv"))
+```
+Count plp variants per gene
+
+```{r counts of plp variants per gene}
+# count number of p/lp variants per gene
+plp_counts <- data.frame(table(cnv_paper_master_plp$gene))
+
+# rename columns
+plp_counts <- rename(plp_counts, gene = Var1, count = Freq)
+
+# sort by counts
+plp_counts <- plp_counts %>% 
+  arrange(desc(count))
+
+# write csv
+write_csv(plp_counts, here("output", "data", "cnv_paper_plp_counts.csv"))
+```
+
+Count plp deletions per gene
+
+```{r counts of plp DEL per gene}
+# count number of p/lp variants per gene
+plp_counts_del <- data.frame(table(cnv_paper_master_plp_del$gene))
+
+# rename columns
+plp_counts_del <- rename(plp_counts_del, gene = Var1, count = Freq)
+
+# sort by counts
+plp_counts_del <- plp_counts_del %>% 
+  arrange(desc(count))
+
+# write csv
+write_csv(plp_counts_del, here("output", "data", "cnv_paper_plp_counts_del.csv"))
+```
+
+join plp and plp del only into one table
+
+```{r join plp/DEL tables}
+cnv_paper_counts <- inner_join(plp_counts, plp_counts_del, by = "gene")
+
+# rename columns
+cnv_paper_counts <- cnv_paper_counts %>% 
+  rename(plp_counts = count.x, plp_del_counts = count.y) %>% 
+  mutate(perc_of_all_plp_var = plp_del_counts/plp_counts*100)
+
+# write csv
+write_csv(cnv_paper_counts, here("output", "data", "cnv_paper_counts.csv"))
+```
+
+Deletions affecting additional LOF-intolerant genes
+
+```{r Deletions affecting additional LOF-intolerant genes}
+# select columns needed
+cnv <- cnv_paper_master_plp_del %>%
+  select(1:5, 8)
+
+df <- unique(cnv_paper_master_plp$gene)
+
+# create empty df for output 1
+output <- tibble(X1 = NA,
+                 X2 = NA,
+                 X3 = NA,
+                 X4 = NA,
+                 count = NA,
+                 gene = NA)
+
+# create empty df for output 2
+output_summ <- cnv_paper_master_plp %>%
+  group_by(gene) %>%
+  summarize(patho_count = n()) %>%
+  mutate(del_count = 0,
+         del_frac = 0,
+         del_addtnl_pLI = 0)
+
+# for loop doing operations
+for (genename in df)  { # genename is just placeholder for looping
+  cnv_int <- cnv %>% # create new object for use within loop only. Here cnv is used as source df
+    filter(str_detect(gene, genename)) %>% # first "gene" is column of df str_detect will search, se
+    separate_rows(X5, sep = ',') %>% 
+    dplyr::group_by(X1, X2, X3, X4) %>%
+    dplyr::summarize(count = n()) %>%
+    mutate(count = count - 1,
+           gene = genename)
+  output <- bind_rows(output, cnv_int)
+  
+  n_addtnl_pLI <- cnv_int$count[cnv_int$count > 0]
+  index <- match(genename, df)
+    
+  output_summ$del_count[index] <- length(cnv_int$count)
+  output_summ$del_addtnl_pLI[index] <- length(n_addtnl_pLI)
+  output_summ$del_frac[index] <- output_summ$del_addtnl_pLI[index]/output_summ$del_count[index]
+}
+# remove genes with no deletions
+output_summ <- output_summ %>% 
+  filter(del_count != 0)
+# add sum row
+df.xx <- output_summ %>% 
+  group_by(gene) %>% 
+  summarize(del_count = sum(del_count), del_addtnl_pLI = sum(del_addtnl_pLI), del_frac = mean(del_frac)) %>% 
+  bind_rows(data.frame(gene = 'TOTALS',
+                   del_count = sum(.$del_count),
+                   del_addtnl_pLI = sum(.$del_addtnl_pLI),
+                   del_frac = mean(.$del_frac))) %>% 
+  arrange(del_addtnl_pLI)
+# write output
+write_csv(df.xx, here("output", "tables", "cnv_paper_final_counts.csv"))
+```
