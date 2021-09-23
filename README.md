@@ -1,1 +1,3 @@
-# Oligogenic-LOF
+**Identification and quantification of oligogenic loss-of-function disorders**
+
+All 18,197 human genes were retrieved from the UCSC Human Genome Browser in hg19 assembly. We defined three intervals (0.5 Mb, 1 Mb, 5 Mb). To showcase the genomic distribution of LOF-intolerant genes analysis we will focus here on thee 5 Mb interval only. We investigate the distribution of LOF-intolerant genes following two approaches (1) around each gene and (2) as a non-overlapping sliding window across the genome. Using bedtools (www. bedtools.readthedocs.io), we annotate LOF-intolerant genes to these artificial intervals and count for each gene all neighboring genes and all LOF-intolerant genes per interval. LOF-intolerant genes were defined by a probability of loss-of-function (LOF) intolerance (pLI)>0.9 based on variation observed in 60,706 exomes of the Exome Aggregation Consortium (ExAC). We annotated a total of 3,230 pLI genes.
