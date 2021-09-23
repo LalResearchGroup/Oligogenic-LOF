@@ -1,0 +1,325 @@
+---
+title: "3. Frequency of deletions affecting multiple LOF-intolerant genes (ClinVar)"
+output: html_document
+---
+
+# **Identification and quantification of oligogenic loss-of-function disorders**
+
+All 18,197 human genes were retrieved from the UCSC Human Genome Browser in hg19 assembly. We defined three intervals (0.5 Mb, 1 Mb, 5 Mb). To showcase the genomic distribution of LOF-intolerant genes analysis we will focus here on thee 5 Mb interval only. We investigate the distribution of LOF-intolerant genes following two approaches (1) around each gene and (2) as a non-overlapping sliding window across the genome. Using bedtools (www. bedtools.readthedocs.io), we annotate LOF-intolerant genes to these artificial intervals and count for each gene all neighboring genes and all LOF-intolerant genes per interval. LOF-intolerant genes were defined by a probability of loss-of-function (LOF) intolerance (pLI)>0.9 based on variation observed in 60,706 exomes of the Exome Aggregation Consortium (ExAC). We annotated a total of 3,230 pLI genes.
+
+Input: Tab-delimited table with all human genes
+
+Output:
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# **Packages**
+
+```{r packagees, message = FALSE, warning = FALSE, echo = FALSE}
+library("devtools")
+library("tidyverse")
+library("scales")
+library("here")
+library("gridExtra")
+library("rmarkdown")
+```
+
+# **Read-in files**
+
+```{r read-in files, message = FALSE, warning = FALSE}
+# read-in files
+## all genes
+genes <- read.delim(here("data", "genes.txt"))
+# make genes.txt file available in output/data folder
+write_delim(genes, here("output", "data", "genes.txt"),
+            delim = "\t")
+# rename columns
+genes <- rename(genes, chromosome = chr, start = chromStart, stop = chromEnd)
+# pli genes
+hpli_genes <- read.delim(here("data", "fordist_cleaned_exac_r03_march16_z_pli_rec_null_data.txt"))
+# filter for gene and pli column
+hpli_genes <- hpli_genes %>% 
+  select(chr, cds_start, cds_end, pLI, gene) %>% 
+  filter(pLI >= 0.9) %>% 
+  rename(start = cds_start, stop = cds_end)
+# set chr
+hpli_genes$chr <- sub("^", "chr", hpli_genes$chr)
+# make chromosome column factor
+hpli_genes$chr <- as.factor(as.character(hpli_genes$chr))
+# save as tab delim .txt file for input in bedtools
+write_delim(hpli_genes, here("output", "data", "pLI-genes.txt"),
+                       delim = "\t")
+# rename column
+hpli_genes <- rename(hpli_genes, gene_hpli = gene)
+
+# Create interval - 5Mb - 2.5Mb around each gene
+genes_2500 <- genes %>%
+  mutate(start = start - 2500000,
+         stop = stop + 2500000) %>% # 18,197 genes
+  filter(start >= 0 & stop >= 0) # 17,644 after exclusion of all negative values for start and stop position because bedtools cant compute them
+# Write file for input in bedtools
+write_delim(genes_2500, here("output", "data", "genes_5mb.txt"),
+            col_names = FALSE, delim = "\t")
+```
+
+do I need all the abovee files to read in?
+
+### **ClinVar dataset**
+
+Read-in files
+
+```{r read-in data clinvar}
+# top genes
+lindy <- read_csv(here("data", "20genes_lindy.csv"))
+invitae <- read_csv(here("data", "20genes_invitae.csv"))
+
+# inner join to keep only genes present in both sets
+top.genes <- intersect(lindy, invitae)
+
+# clinvar data 2021-01-31
+clinvar_all <- read_delim(here("data", "variant_summary_2021-01-31.txt"), 
+                   delim = "\t")
+# filter for columns needed
+clinvar <- clinvar_all %>% 
+  select(Chromosome, Start, Stop, Type, GeneSymbol, ClinicalSignificance, PhenotypeList, Assembly) %>% 
+  filter(Assembly == "GRCh37")
+# add unique identifier
+clinvar <- clinvar %>% 
+  rowid_to_column(var = "observation")
+# add another unique identifier
+clinvar$source <- c("clinvar")
+#set chr before Chromosome
+clinvar$Chromosome <- sub("^", "chr", clinvar$Chromosome)
+
+# change separator from semicolon to pipe symbol
+## column PhenotypeList
+clinvar[, 8] <- gsub(";", "|", clinvar$PhenotypeList)
+## column GeneSymbol
+clinvar[, 6] <- gsub(":", "_", clinvar$GeneSymbol)
+## column GeneSymbol
+clinvar[, 6] <- gsub(";", "^", clinvar$GeneSymbol)
+# delete Assembly column
+clinvar$Assembly <- NULL
+# select columns needed
+clinvar_bed <- clinvar %>% 
+    select(observation, Chromosome:Stop)
+# reorder columns
+clinvar_bed <- clinvar_bed[, c(2, 3, 4, 1)]
+# remove mitchondrial variants and those bedtools cant compute
+clinvar_bed.noNA <- clinvar_bed %>% 
+  subset(Start != 139060788) %>% #remove var on chr 5
+  subset(Start != 28192751) %>% #remove var on chr22
+  filter(Chromosome != "chrMT") %>% 
+  rename(chr = Chromosome, start = Start, stop = Stop)#remove all chrMT
+
+# make chromosome column factor
+clinvar_bed.noNA$Start <- as.integer(as.character(clinvar_bed.noNA$Start))
+
+clinvar_bed.noNA$Stop <- as.integer(as.character(clinvar_bed.noNA$Stop))
+
+# make chromosome column factor
+clinvar_bed.noNA$chr <- as.factor(as.character(clinvar_bed.noNA$chr))
+
+# write new file, here 2021-01-31
+write_delim(clinvar_bed.noNA, here("output", "data", "clinvar_bed.txt"),
+            delim = "\t",
+            col_names = FALSE)
+# IMPORTANT when before re-running bedtools
+### EXCLUDE these 2 rows:
+####    chr22	28192751	-1	502500
+####    chr5	139060788	-1	502501
+```
+
+**bedtools**
+
+Go to correct directory:
+
+Perform tasks:
+
+1. bedtools intersect –a clinvar_bed.txt –b genes.txt –wao >clinvar_genes.txt
+2. bedtools groupby –i clinvar_genes.txt –g 1,2,3,4 –c 8 –o collapse >clinvar_genes_master.txt
+
+3. bedtools intersect –a clinvar_bed.txt –b pLI-genes.txt –wao >clinvar_hpli.txt
+4. bedtools groupby –i clinvar_hpli.txt –g 1,2,3,4 –c 9 –o collapse >clinvar_hpli_master.txt
+
+# Import bedtools output data, join, and filtering
+
+```{r import intersect}
+clinvar_intersect_hpli <- read_delim(here("output", "data", "clinvar_hpli.txt"), 
+                   delim = "\t",
+                   col_names = FALSE)
+``` 
+
+```{r import clinvar hpli all types after bedtools}
+clinvar_master_hpli <- read_delim(here("output", "data", "clinvar_hpli_master.txt"), 
+                   delim = "\t",
+                   col_names = FALSE)
+```
+
+```{r join bedtools df and some filter steps - plp / SNV / DEL / 3mb}
+# join with clinvar
+clinvar_bed_full_hpli <- inner_join(clinvar_master_hpli, clinvar, by = c("X4" = "observation"))
+# filter for plp, all types < 3mb
+clinvar_bed_full_hpli_plp_3mb <- clinvar_bed_full_hpli %>% 
+  filter(ClinicalSignificance == "Pathogenic" | ClinicalSignificance == "Likely pathogenic" | ClinicalSignificance == "Pathogenic/Likely pathogenic") %>%
+  mutate(cnv_size = Stop - Start) %>% 
+  filter(cnv_size < 3000000)
+# Latest CLinVar dataset has changed "Type" row names...here the adjustment for Deletion to deletion
+clinvar_bed_full_hpli_plp_3mb <- clinvar_bed_full_hpli_plp_3mb %>% 
+  mutate_at("Type", str_replace, "Deletion", "deletion")
+# make del df
+clinvar_bed_full_hpli_plp_3mb_del <- clinvar_bed_full_hpli_plp_3mb %>% 
+  filter(Type == "deletion" | Type == "copy number loss")
+# write_csv(clinvar_bed_full_hpli_plp_3mb, "clinvar_bed_full_hpli_plp_3mb.csv")
+```
+
+```{r prep dfs}
+# select columns needed
+clinvar <- clinvar_bed_full_hpli_plp_3mb_del %>% # N = 37,426
+  filter(cnv_size > 200000) %>% # remove all DEL smaller than 200kb
+  select(1:5, 10) %>% # N = 3,235
+  rename(gene = GeneSymbol)
+# median
+clinvar_bed_full_hpli_plp_3mb_del_median <- clinvar_bed_full_hpli_plp_3mb_del %>% 
+  mutate(median = median(clinvar_bed_full_hpli_plp_3mb_del$cnv_size)) %>% # median = 1
+  mutate(mean = mean(clinvar_bed_full_hpli_plp_3mb_del$cnv_size)) # mean = 115,359.9
+# add space to "_" separator
+## column GeneSymbol
+clinvar[, 6] <- gsub("_", " _ ", clinvar$gene)
+
+clinvar$new <- ifelse(grepl("KCNQ2", clinvar$gene, ignore.case = T), "KCNQ2", 
+                      ifelse(grepl("SCN1A", clinvar$gene, ignore.case = T), "SCN1A",
+                             ifelse(grepl("SCN2A", clinvar$gene, ignore.case = T), "SCN2A",
+                                    ifelse(grepl("FOXG1", clinvar$gene, ignore.case = T), "FOXG1",
+                                           ifelse(grepl("MECP2", clinvar$gene, ignore.case = T), "MECP2",
+                                                  ifelse(grepl("UBE3A", clinvar$gene, ignore.case = T), "UBE3A",
+                                                         ifelse(grepl("PCDH19", clinvar$gene, ignore.case = T), "PCDH19",
+                                                                ifelse(grepl("\\bSLC2A1\\b", clinvar$gene, ignore.case = T), "SLC2A1",
+                                                                       ifelse(grepl("CDKL5", clinvar$gene, ignore.case = T), "CDKL5",
+                                                                              ifelse(grepl("STXBP1", clinvar$gene, ignore.case = T), "STXBP1",
+                                                                                     ifelse(grepl("TSC2", clinvar$gene, ignore.case = T), "TSC2",
+                                                                                            ifelse(grepl("PRRT2", clinvar$gene, ignore.case = T), "PRRT2","other"))))))))))))
+
+clinvar <- clinvar %>% 
+  select(X1:X5, new) %>% 
+  rename(gene = new) %>% 
+  filter(gene != "other")
+
+# fix for MECP2 not being a high pLI gene
+# only mecp2
+cv.mecp2 <- clinvar %>% 
+  filter(gene == "MECP2")
+# only additional high pLI genes hit
+cv.m2 <- cv.mecp2 %>% 
+  filter(X5 != ".")
+# only no additional genes hit
+cv.m3 <- cv.mecp2 %>% 
+  filter(X5 == ".")
+# only non mecp2
+cv.other <- clinvar %>% 
+  filter(gene != "MECP2")
+## write MECP2 into col X5 because it is not a high pLI gene
+cv.m2$X5 <- sub("^", "MECP2,", cv.m2$X5)
+# bind both again together
+cv.mecp2 <- bind_rows(cv.m2, cv.m3)
+# recreate clinvar df
+clinvar <- bind_rows(cv.mecp2, cv.other)
+
+size.diff <- clinvar %>% 
+  mutate(size = X3 - X2)
+```
+
+```{r pressure, echo=FALSE}
+clinvarbedhpliplp_3mb <- clinvar_bed_full_hpli_plp_3mb
+
+clinvarbedhpliplp_3mb$gene <- ifelse(grepl("KCNQ2", clinvarbedhpliplp_3mb$GeneSymbol, ignore.case = T), "KCNQ2", 
+                      ifelse(grepl("SCN1A", clinvarbedhpliplp_3mb$GeneSymbol, ignore.case = T), "SCN1A",
+                             ifelse(grepl("SCN2A", clinvarbedhpliplp_3mb$GeneSymbol, ignore.case = T), "SCN2A",
+                                    ifelse(grepl("FOXG1", clinvarbedhpliplp_3mb$GeneSymbol, ignore.case = T), "FOXG1",
+                                           ifelse(grepl("MECP2", clinvarbedhpliplp_3mb$GeneSymbol, ignore.case = T), "MECP2",
+                                                  ifelse(grepl("UBE3A", clinvarbedhpliplp_3mb$GeneSymbol, ignore.case = T), "UBE3A",
+                                                         ifelse(grepl("PCDH19", clinvarbedhpliplp_3mb$GeneSymbol, ignore.case = T), "PCDH19",
+                                                                ifelse(grepl("\\bSLC2A1\\b", clinvarbedhpliplp_3mb$GeneSymbol, ignore.case = T), "SLC2A1",
+                                                                       ifelse(grepl("CDKL5", clinvarbedhpliplp_3mb$GeneSymbol, ignore.case = T), "CDKL5",
+                                                                              ifelse(grepl("STXBP1", clinvarbedhpliplp_3mb$GeneSymbol, ignore.case = T), "STXBP1",
+                                                                                     ifelse(grepl("TSC2", clinvarbedhpliplp_3mb$GeneSymbol, ignore.case = T), "TSC2",
+                                                                                            ifelse(grepl("PRRT2", clinvarbedhpliplp_3mb$GeneSymbol, ignore.case = T), "PRRT2","other"))))))))))))
+
+clinvarbedhpliplp_3mb <- clinvarbedhpliplp_3mb %>% 
+  filter(gene != "other") %>% 
+  filter(GeneSymbol != "FOXG1") %>% 
+  filter(X1 != "chr14")
+  # filter(cnv_size > 200000) # remove all DEL smaller than 200kb
+  
+cnv_paper_bed_full_hpli_median <- cnv_paper_bed_full_hpli %>% 
+  mutate(median = median(cnv_paper_bed_full_hpli$cnv_size))
+```
+
+```{r clinvar N deletions with at least 1 additional high pLI gene affected}
+# selected epilepsy genes
+df.cvar <- top.genes$genes
+
+# remove FOXG1 bc it has no deletions
+df.cvar <- df.cvar[-2]
+# create empty df for output 1
+output.cvar <- tibble(X1 = NA,
+                 X2 = NA,
+                 X3 = NA,
+                 X4 = NA,
+                 count = NA,
+                 gene = NA)
+
+# create empty df for output 2
+output_cvar <- clinvarbedhpliplp_3mb %>%
+  # rename(gene = GeneSymbol) %>% 
+  group_by(gene) %>%
+  summarize(patho_count = n()) %>%
+  mutate(del_count = 0,
+         del_frac = 0,
+         del_addtnl_pLI = 0)
+
+# for loop doing operations
+for (genename in df.cvar)  { # genename is just placeholder for looping
+  cvar_int <- clinvar %>% # create new object for use within loop only. Here clinvar is used as source df
+    filter(str_detect(gene, genename)) %>% # first "gene" is column of df str_detect will search, se
+    separate_rows(X5, sep = ',') %>% 
+    dplyr::group_by(X1, X2, X3, X4) %>%
+    dplyr::summarize(count = n()) %>% 
+    mutate(count = count - 1,
+           gene = genename)
+  output.cvar <- bind_rows(output.cvar, cvar_int)
+
+  n_addtnl_pLI <- cvar_int$count[cvar_int$count > 0]
+  index <- match(genename, df.cvar)
+
+  output_cvar$del_count[index] <- length(cvar_int$count)
+  output_cvar$del_addtnl_pLI[index] <- length(n_addtnl_pLI)
+  output_cvar$del_frac[index] <- output_cvar$del_addtnl_pLI[index]/output_cvar$del_count[index]
+}
+# remove genes with no deletions
+# output_cvar <-
+#   output_cvar %>%
+#   filter(del_count != 0)
+# # add sum row
+df.clinvar <- output_cvar %>%
+  group_by(gene) %>%
+  summarize(del_count = sum(del_count), del_addtnl_pLI = sum(del_addtnl_pLI), del_frac = mean(del_frac)) %>%
+  bind_rows(data.frame(gene = 'TOTALS',
+                   del_count = sum(.$del_count),
+                   del_addtnl_pLI = sum(.$del_addtnl_pLI),
+                   del_frac = mean(.$del_frac))) %>%
+  arrange(del_addtnl_pLI)
+# write output
+write_csv(df.clinvar, here("output", "tables", "clinvar_final_counts_cutoff.csv"))
+
+# # write output OLD
+# write_csv(df.clinvar, here("output", "tables", "clinvar_final_counts.csv"))
+```
+
+```{r check UBE3A}
+df.ube3a <- clinvar_bed_full_hpli_plp_3mb_del %>% 
+  filter(str_detect(GeneSymbol, '\\b(UBE3A|genes_ MAGEL2_SNURF_UBE3A)\\b'))
+
+```
